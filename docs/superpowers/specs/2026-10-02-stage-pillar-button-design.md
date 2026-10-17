@@ -25,7 +25,7 @@ context only (OTA setup, PlatformIO layout); no code is reused.
 Request: `POST http://<pi>:8000/api/buttons/press/<action>`, empty body.
 The server already implements this endpoint; no server changes are needed.
 
-## Idle gate (added 2026-10-02)
+## Idle gate (added 2026-10-02; REMOVED by the show alignment below)
 
 The button polls `GET /api/player/state` every 1 s in a background task. While
 no song is loaded (`current_song` is null, unknown, or Pi unreachable; paused counts as running), only `start`
@@ -60,7 +60,7 @@ the ESP side only.
   (`lib/pillar/show_latch.h`), so a stale poll cannot replay the stop fade.
 - The poll reports `?client=pillar&running_version=<n>` so the server can show pillar status.
 
-## Two pillars (added 2026-10-17)
+## Two pillars (added 2026-10-17; pillar_id REPLACED by side L/R, see show alignment)
 
 Two pillars with identical hardware and behaviour: same LED plans, same gestures,
 same show-state rules, same preview. The ID only tells them apart for status, logs
@@ -86,7 +86,7 @@ and OTA. A later "dual games mode" will need a separate input mode; it is out of
 - Tests: native tests for the URL builders (poll and press carry `pillar_id`); on
   hardware, pillar 1 answers as `stage-pillar-1.local` and the server lists it as pillar 1.
 
-## Programs commanded by the Pi (added 2026-10-17)
+## Programs commanded by the Pi (added 2026-10-17; UDP REPLACED by WebSocket, see show alignment)
 
 A library of pre-built LED programs lives on StageController; the Pi tells each pillar
 which program to play. The gesture slots stay as the fallback behaviour.
@@ -125,6 +125,71 @@ which program to play. The gesture slots stay as the fallback behaviour.
 - A pillar the server has not heard from yet gets no UDP packet; it picks the command up
   from its first state reply.
 - Preview ("Play on pillar") is unchanged and still interrupts everything.
+
+## Show alignment (added 2026-10-17)
+
+Aligns the pillars with Tom's show design (`StageController/docs/show-events-contract.md`,
+fcf52b3) and the pillar LED contract. Where this section conflicts with the sections above,
+this section wins.
+
+**Identity: sides, not ids**
+- `PILLAR_SIDE` is `L` or `R` (left/right seen from the entrance), set per PlatformIO env:
+  `pillarL` / `pillarL-ota` → `stage-pillar-l.local`, `pillarR` / `pillarR-ota` →
+  `stage-pillar-r.local`. The current board (192.168.0.101, flashed as `stage-pillar-1`) is
+  **R**; the second board is **L**. `PILLAR_ID` and the pillar1/2 envs are removed.
+- Poll: `GET /api/player/state?client=pillar&side=<L|R>&running_version=<n>`.
+
+**Presses**
+- `POST /api/buttons/press` with JSON `{"action", "side", "taps", "first_press_ago_ms"}`.
+  `taps` is the real tap count (the detector's cap rises from 5 to 20; a long press sends
+  `stop` with taps 1). `first_press_ago_ms` = time from the gesture's debounced first-press
+  edge to the moment the sender task sends, so it includes the gap wait and queue time.
+- The ESP idle gate is removed: every gesture is sent; the show director decides. The
+  start/stop assumption window (`ShowLatch`) stays for the LEDs' play loop.
+
+**Live show events (WebSocket)**
+- The ESP keeps a WebSocket open to `ws://<pi>:8000/api/buttons/ws` (reconnect with backoff)
+  and ignores every message except `action: "show"` and `action: "pillar_command"`.
+- From a show event it takes `state` and its own side's pole: `pct`, `color`, `level`,
+  `mode`, `ms`. It ignores `buttons` (no separate ring: the pillar is the button), `perimeter`,
+  `song`, `thunder` and unknown fields.
+- Drawing a pole on the 100 LEDs (index 0 = bottom, toward the button):
+  - `off`: dark. `solid`: LEDs below `pct`% lit.
+  - `glow`: all LEDs lit at `level`% brightness (default 35), regardless of `pct`.
+  - `pulse`: the `solid` fill with a brightness triangle 0→100→0 over `ms` (default 1000).
+  - `blink`: the `solid` fill on/off, 500 ms period, 50 % duty.
+  - `drain`: the fill falls linearly from `pct` to 0 over `ms`, from when the event arrived.
+  - Colour per LED i at time t: palette `ramp` = [dim, base, bright]; for every name except
+    `white`, drift: k = 0.5 + 0.5·sin(0.33·i − 2π·t/period), colour = lerp(dim, base, 2k) if
+    k < 0.5 else lerp(base, bright, 2k − 1); `white` uses `base`. Then × `gain`, capped at 255.
+    `period` is the colour's `drift_ms`. This matches Tom's emulator (`stageLook.ts drift()`).
+- Palette: `GET /api/show/palette` → `{"version", "colors": {name: {"ramp", "gain",
+  "drift_ms"}}}`, fetched at boot and whenever `show_palette_version` in the state reply
+  changes. Kept in RAM (small); a built-in copy of today's spec.json values is the fallback
+  until the first fetch succeeds.
+- The latest show event is drawn until the next one arrives; the ESP never times intro steps.
+
+**Programs (replaces the UDP part above)**
+- Commands arrive on the same WebSocket as `{"action":"pillar_command","side","seq","program"}`;
+  the ESP takes only its own side. The state reply's `pillar_command` stays as the backup.
+  The library, seq rule, keep-unknown-command rule and 10 s pause rule are unchanged.
+
+**Layer order (top wins)**
+1. Preview ("Play on pillar").
+2. Show event, when `state` is not `idle`.
+3. Gesture one-shot slot (only drawn while the show state is `idle`).
+4. Commanded program.
+5. Slot base: idle rainbow, or the play loop while a song is loaded.
+With no WebSocket connection the show state counts as `idle`, so the pillar keeps working on
+its own slots and programs.
+
+**Testing (native)**
+- Press body builder (side, taps, first_press_ago_ms) and the detector's real tap count and
+  first-press time.
+- Show-event parser (state, own side's pole, ignoring other fields) and pillar_command parser.
+- Pole renderer: each mode, pct fill, glow level, pulse/blink/drain timing, drift formula
+  against values computed from the formula, white without drift, gain cap.
+- Layer compositor: the order above, including show idle falling through to lower layers.
 
 ## Hardware
 
