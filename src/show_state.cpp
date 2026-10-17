@@ -6,6 +6,7 @@
 #include "plan_store.h"
 #include "show_gate.h"
 #include "show_latch.h"
+#include "urls.h"
 
 static ShowLatch latch;
 static volatile bool lastReported = false;
@@ -15,8 +16,9 @@ static volatile bool lastReported = false;
 static bool pollState() {
     if (!netConnected()) return false;
     IPAddress server = netServerIp();
-    String url = "http://" + server.toString() + ":" + String(SERVER_PORT) +
-                 "/api/player/state?client=pillar&running_version=" + String(planStoreVersion());
+    char path[96];
+    if (!pollPath(path, sizeof(path), PILLAR_ID, planStoreVersion())) return false;
+    String url = "http://" + server.toString() + ":" + String(SERVER_PORT) + path;
     HTTPClient http;
     http.setConnectTimeout(HTTP_TIMEOUT_MS);
     http.setTimeout(HTTP_TIMEOUT_MS);

@@ -8,6 +8,7 @@
 #include "pillar_leds.h"
 #include "send_policy.h"
 #include "status_led.h"
+#include "urls.h"
 
 struct QueuedGesture {
     Gesture gesture;
@@ -30,8 +31,9 @@ static void send(Gesture gesture) {
         return;
     }
 
-    String url = "http://" + netServerIp().toString() + ":" + String(SERVER_PORT) +
-                 "/api/buttons/press/" + action;
+    char path[64];
+    pressPath(path, sizeof(path), action, PILLAR_ID);
+    String url = "http://" + netServerIp().toString() + ":" + String(SERVER_PORT) + path;
     HTTPClient http;
     http.setConnectTimeout(HTTP_TIMEOUT_MS);
     http.setTimeout(HTTP_TIMEOUT_MS);

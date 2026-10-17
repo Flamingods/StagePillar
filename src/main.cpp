@@ -15,7 +15,7 @@ static GestureDetector detector;
 
 void setup() {
     Serial.begin(115200);
-    Serial.printf("\nStagePillar button %s\n", FIRMWARE_VERSION);
+    Serial.printf("\nStagePillar %d (%s) firmware %s\n", PILLAR_ID, DEVICE_HOSTNAME, FIRMWARE_VERSION);
     pinMode(BUTTON_PIN, INPUT_PULLUP);
     statusLedBegin();
     planStoreBegin();

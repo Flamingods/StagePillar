@@ -48,9 +48,14 @@ flashes mean the press did not reach the server. The strip is dark during OTA.
 
 ## Setup
 
+There are two identical pillars. Each build is for one of them: the environment sets
+`PILLAR_ID` and the matching OTA hostname (`stage-pillar-1.local` / `stage-pillar-2.local`).
+Requests to the server carry `pillar_id` so it can show each pillar's status.
+
 ```bash
-cp include/secrets.example.h include/secrets.h   # then edit
-pio test -e native                                # unit tests on the host
-pio run -e esp32dev -t upload                     # USB
-ESP_OTA_PASSWORD=... pio run -e esp32dev-ota -t upload   # OTA to stage-pillar.local
+cp include/secrets.example.h include/secrets.h        # then edit
+pio test -e native                                     # unit tests on the host
+pio run -e pillar2 -t upload                           # first flash of a board over USB
+ESP_OTA_PASSWORD=... pio run -e pillar1-ota -t upload  # OTA to stage-pillar-1.local
+ESP_OTA_PASSWORD=... pio run -e pillar2-ota -t upload  # OTA to stage-pillar-2.local
 ```
