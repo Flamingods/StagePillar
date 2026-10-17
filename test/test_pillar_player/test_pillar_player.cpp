@@ -315,6 +315,16 @@ void test_preview_wins_over_program_and_returns_to_it() {
     TEST_ASSERT_TRUE(showingPlan(prog, 1300, 1300));
 }
 
+void test_single_tap_keeps_the_program() {
+    PillarPlayer p;
+    Plan prog = programPlan(true);
+    p.setProgram(prog, 0);
+    p.trigger(Slot::Start, 1000);  // a launch tap or a thunder steal
+    p.setShowRunning(true, 1100);
+    p.render(5000, frame, N);
+    TEST_ASSERT_TRUE(showingPlan(prog, 0, 5000));
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_slot_for_each_gesture);
@@ -340,5 +350,6 @@ int main() {
     RUN_TEST(test_one_shot_program_ends_and_reports_it);
     RUN_TEST(test_clear_program_returns_to_normal);
     RUN_TEST(test_preview_wins_over_program_and_returns_to_it);
+    RUN_TEST(test_single_tap_keeps_the_program);
     return UNITY_END();
 }

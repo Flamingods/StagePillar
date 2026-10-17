@@ -28,7 +28,8 @@ public:
     // Program id to play now, or 0 for normal behaviour.
     uint16_t wanted(uint32_t nowMs) const {
         if (program_ == 0 || finished_) return 0;
-        if (!polled_ || nowMs - lastPollMs_ >= kPauseAfterMs) return 0;
+        // Signed age: the poll task may record a time slightly after the frame's clock.
+        if (!polled_ || int32_t(nowMs - lastPollMs_) >= int32_t(kPauseAfterMs)) return 0;
         return program_;
     }
     uint32_t lastSeq() const { return seq_; }

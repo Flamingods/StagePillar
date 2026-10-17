@@ -13,6 +13,8 @@ struct Plan {
 class SequenceRenderer {
 public:
     void start(Plan plan, uint32_t nowMs, uint32_t seed);
+    // Point at an identical copy of the same plan without restarting it.
+    void retarget(Plan plan) { plan_ = plan; }
 
     // frame must hold what the strip currently shows; it is overwritten with the next
     // frame. Frame steps fade from a snapshot of it taken when the step starts.

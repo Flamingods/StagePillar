@@ -63,6 +63,7 @@ bool planIndex(const ByteSource& src, PlanIndex& out) {
         crc = crc32(buf, len, crc);
         at += len;
     }
+    out.crc = crc;
     return at == size && crc == get32(header + 12);
 }
 

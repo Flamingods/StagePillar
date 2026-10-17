@@ -87,7 +87,15 @@ void PillarPlayer::play(Slot slot, uint32_t nowMs) {
 
 void PillarPlayer::trigger(Slot slot, uint32_t nowMs) {
     if (slot == Slot::None || slot == Slot::Preview || slot == Slot::Program) return;
-    if (slot == Slot::Start) running_ = true;
+    if (slot == Slot::Start) {
+        running_ = true;
+        // The play loop never ends by itself, so while a program is commanded a single
+        // tap (a launch tap, a thunder steal) keeps the program instead of replacing it.
+        if (programActive_) {
+            if (active_ != Slot::Program && active_ != Slot::Preview) play(Slot::Program, nowMs);
+            return;
+        }
+    }
     if (slot == Slot::Stop) running_ = false;
     play(slot, nowMs);
 }
@@ -121,6 +129,11 @@ void PillarPlayer::clearProgram(uint32_t nowMs) {
     if (!programActive_) return;
     programActive_ = false;
     if (active_ == Slot::Program) play(base(), nowMs);
+}
+
+void PillarPlayer::updateProgramPlan(Plan plan) {
+    program_ = plan;
+    if (active_ == Slot::Program) renderer_.retarget(plan);
 }
 
 bool PillarPlayer::takeProgramFinished() {

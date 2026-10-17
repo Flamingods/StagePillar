@@ -38,6 +38,8 @@ public:
     // until it finishes (reported once by takeProgramFinished).
     void setProgram(Plan plan, uint32_t nowMs);
     void clearProgram(uint32_t nowMs);
+    // Same program, new storage location (library swapped in, file unchanged): keep playing.
+    void updateProgramPlan(Plan plan);
     bool takeProgramFinished();
     // Plans changed on disk: restart the base loop from its new plan. A one-shot ends,
     // since its file may have been replaced under it.

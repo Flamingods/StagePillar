@@ -41,6 +41,7 @@ struct PlanIndex {
     bool loop;
     uint8_t stepCount;
     uint32_t totalMs;
+    uint32_t crc;  // the file's body CRC: tells whether two files hold the same plan
     StepKind kind[kPlanMaxSteps];
     uint16_t offset[kPlanMaxSteps];
     uint16_t durationMs[kPlanMaxSteps];

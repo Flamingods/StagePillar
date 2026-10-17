@@ -78,6 +78,14 @@ void test_program_index_rejects_bad_input() {
     TEST_ASSERT_FALSE(parseProgramIndex(many, idx));  // more than 24 programs
 }
 
+void test_poll_newer_than_the_frame_clock_does_not_pause() {
+    // The poll task can record a time a few ms after loop() read millis().
+    ProgramControl c;
+    c.offer(PillarCommand{1, 6});
+    c.pollOk(5005);
+    TEST_ASSERT_EQUAL_UINT16(6, c.wanted(5000));
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_no_command_means_no_program);
@@ -87,5 +95,6 @@ int main() {
     RUN_TEST(test_reports_the_last_seq);
     RUN_TEST(test_program_index_parsing);
     RUN_TEST(test_program_index_rejects_bad_input);
+    RUN_TEST(test_poll_newer_than_the_frame_clock_does_not_pause);
     return UNITY_END();
 }

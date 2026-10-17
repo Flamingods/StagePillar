@@ -21,6 +21,7 @@ static PillarPlayer player(planStoreLookup);
 static PillarMixer mixer(player);
 static ProgramControl programControl;
 static uint16_t programShown = 0;  // library id handed to the player, 0 = none
+static uint32_t programShownCrc = 0;
 static bool failActive = false;
 static uint32_t failStartMs = 0;
 
@@ -71,7 +72,11 @@ void pillarLedsUpdate(uint32_t nowMs, bool otaActive, bool showRunning) {
     // Live show from the WebSocket.
     ShowEvent event;
     if (showLinkTakeEvent(event)) mixer.setShowEvent(event, nowMs);
-    mixer.setShowConnected(showLinkConnected());
+    bool linked = showLinkConnected();
+    // Forget the last game when the socket drops, so a reconnect cannot flash a stale pole
+    // before the server replays its current event.
+    if (!linked) mixer.setShowEvent(ShowEvent{}, nowMs);
+    mixer.setShowConnected(linked);
     Palette palette;
     if (planStoreTakePalette(palette)) mixer.setPalette(palette);
 
@@ -85,8 +90,14 @@ void pillarLedsUpdate(uint32_t nowMs, bool otaActive, bool showRunning) {
     if (wanted != programShown || (libraryChanged && wanted != 0)) {
         Plan program;
         if (wanted != 0 && planStoreProgram(wanted, program)) {
-            player.setProgram(program, nowMs);
+            // A library sync restarts the program only if its own file changed.
+            if (wanted != programShown || program.index->crc != programShownCrc) {
+                player.setProgram(program, nowMs);
+            } else {
+                player.updateProgramPlan(program);
+            }
             programShown = wanted;
+            programShownCrc = program.index->crc;
         } else {
             player.clearProgram(nowMs);  // released, paused, or not in the library yet
             programShown = 0;

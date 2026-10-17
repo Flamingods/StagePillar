@@ -34,9 +34,11 @@ const char* kStaging = "/plans/new";
 const char* kVersionFile = "/plans/version";
 const char* kPreviewStaging = "/preview.new";
 const char* kPreviewFile = "/preview.bin";
-const char* kProgramsDir = "/programs";
-const char* kProgramsStaging = "/programs/new";
-const char* kProgramsVersionFile = "/programs/version";
+// The program library lives in one of two folders, /programs/a and /programs/b. A new
+// library is downloaded into the inactive one and loop() just switches to it, so loop()
+// does no file work at all; the download task then records the switch in kProgramsPointer.
+const char* kProgramsRoot = "/programs";
+const char* kProgramsPointer = "/programs/active";  // "<a|b> <version>"
 const uint32_t kRetryMinMs = 5000;
 const uint32_t kRetryMaxMs = 300000;
 
@@ -64,6 +66,9 @@ struct ProgramEntry {
 };
 ProgramEntry programs[kMaxPrograms];
 uint8_t programCount = 0;
+volatile char activeLetter = 'a';
+char stagedLetter = 'b';
+volatile bool pointerDirty = false;
 uint8_t stagedIds[kMaxPrograms];
 PlanIndex stagedProgramIndexes[kMaxPrograms];
 uint8_t stagedProgramCount = 0;
@@ -217,7 +222,15 @@ bool getText(const String& url, String& out, uint32_t maxBytes) {
     return ok;
 }
 
-String programPath(const char* dir, uint8_t id) { return String(dir) + "/" + String(id) + ".bin"; }
+String programDir(char letter) { return String(kProgramsRoot) + "/" + letter; }
+String programPath(char letter, uint8_t id) { return programDir(letter) + "/" + String(id) + ".bin"; }
+
+void writePointer() {
+    File f = LittleFS.open(kProgramsPointer, "w");
+    f.printf("%c %u", activeLetter, (unsigned)activeProgramsVersion);
+    f.close();
+    Serial.printf("Plans: %u of %u KB used\n", unsigned(LittleFS.usedBytes() / 1024), unsigned(LittleFS.totalBytes() / 1024));
+}
 
 // Fetches the whole library for `version` into staging. A program the ESP cannot play is
 // left out; a version change or a failed download fails the round.
@@ -226,11 +239,14 @@ bool downloadPrograms(uint32_t version) {
     ProgramIndex idx;
     if (!getText(apiBase() + "programs/index", text, 2048) || !parseProgramIndex(text.c_str(), idx)) return false;
     if (idx.version != version) return false;
-    clearDir(kProgramsStaging);
+    stagedLetter = activeLetter == 'a' ? 'b' : 'a';
+    String dir = programDir(stagedLetter);
+    LittleFS.mkdir(dir);
+    clearDir(dir.c_str());
     stagedProgramCount = 0;
     for (uint8_t i = 0; i < idx.count; i++) {
         uint8_t id = idx.ids[i];
-        String path = programPath(kProgramsStaging, id);
+        String path = programPath(stagedLetter, id);
         if (download(apiBase() + "programs/" + String(id) + ".bin", path.c_str()) != 1) return false;
         uint32_t fileVersion;
         if (headerVersion(path.c_str(), fileVersion) && fileVersion != version) return false;
@@ -269,6 +285,9 @@ void syncPalette() {
     Palette p;
     if (getText("http://" + netServerIp().toString() + ":" + String(SERVER_PORT) + "/api/show/palette", text, 4096) &&
         parsePalette(text.c_str(), p)) {
+        // Mark the version the state reply announced as done, even if the body carries a
+        // different one, so a mismatch cannot cause a refetch every 200 ms.
+        p.version = version;
         stagedPalette = p;
         __sync_synchronize();
         paletteStaged = true;
@@ -315,6 +334,10 @@ void syncPlans() {
 void downloadTask(void*) {
     for (;;) {
         if (netConnected()) {
+            if (pointerDirty) {
+                pointerDirty = false;
+                writePointer();
+            }
             syncPreview();
             syncPalette();
             syncPlans();
@@ -340,9 +363,21 @@ void planStoreBegin() {
         valid[i] = LittleFS.exists(path) && indexFile(path.c_str(), indexes[i]);
     }
     activeVersion = readVersionFile();
-    LittleFS.mkdir(kProgramsDir);
-    LittleFS.mkdir(kProgramsStaging);
-    File dir = LittleFS.open(kProgramsDir);
+    LittleFS.mkdir(kProgramsRoot);
+    uint32_t pointedVersion = 0;
+    {
+        File f = LittleFS.open(kProgramsPointer, "r");
+        if (f) {
+            String text = f.readString();
+            if (text.length() >= 1 && (text[0] == 'a' || text[0] == 'b')) {
+                activeLetter = text[0];
+                pointedVersion = text.substring(2).toInt();
+            }
+            f.close();
+        }
+    }
+    LittleFS.mkdir(programDir(activeLetter));
+    File dir = LittleFS.open(programDir(activeLetter));
     for (File f = dir.openNextFile(); f && programCount < kMaxPrograms; f = dir.openNextFile()) {
         String name = f.name();
         bool isDir = f.isDirectory();
@@ -351,7 +386,7 @@ void planStoreBegin() {
         int id = name.toInt();
         if (id < 1 || id > 255) continue;
         ProgramEntry& e = programs[programCount];
-        String path = programPath(kProgramsDir, uint8_t(id));
+        String path = programPath(activeLetter, uint8_t(id));
         e.source.setPath(path);
         if (indexFile(path.c_str(), e.index)) {
             e.id = uint8_t(id);
@@ -359,7 +394,7 @@ void planStoreBegin() {
         }
     }
     dir.close();
-    activeProgramsVersion = readVersionFile(kProgramsVersionFile);
+    activeProgramsVersion = pointedVersion;
     Serial.printf("Plans: version %u, programs %u (%u stored)\n", (unsigned)activeVersion,
                   (unsigned)activeProgramsVersion, programCount);
     xTaskCreate(downloadTask, "plans", 8192, nullptr, 1, nullptr);
@@ -420,21 +455,17 @@ bool planStoreProgram(uint16_t id, Plan& out) {
 bool planStoreApplyPrograms() {
     uint32_t version = stagedProgramsVersion;
     if (version == 0) return false;
-    clearDir(kProgramsDir);  // files only; the staging folder stays
+    // No file work here: the staged folder already holds the files; just point at it.
     programCount = 0;
     for (uint8_t i = 0; i < stagedProgramCount; i++) {
-        uint8_t id = stagedIds[i];
-        String active = programPath(kProgramsDir, id);
-        LittleFS.rename(programPath(kProgramsStaging, id), active);
         ProgramEntry& e = programs[programCount++];
-        e.id = id;
-        e.source.setPath(active);
+        e.id = stagedIds[i];
+        e.source.setPath(programPath(stagedLetter, stagedIds[i]));
         e.index = stagedProgramIndexes[i];
     }
-    File f = LittleFS.open(kProgramsVersionFile, "w");
-    f.print(version);
-    f.close();
+    activeLetter = stagedLetter;
     activeProgramsVersion = version;
+    pointerDirty = true;
     stagedProgramsVersion = 0;
     Serial.printf("Plans: program library %u (%u programs)\n", (unsigned)version, programCount);
     return true;

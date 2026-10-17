@@ -163,6 +163,13 @@ void test_encode_refuses_small_buffer() {
     TEST_ASSERT_EQUAL_UINT32(0, encodeEffectPlan(1, true, steps, 1, buf, sizeof(buf)));
 }
 
+void test_index_keeps_the_file_crc() {
+    MemorySource src(file, fileLen);
+    PlanIndex index;
+    planIndex(src, index);
+    TEST_ASSERT_EQUAL_HEX32(crc32(file + 16, fileLen - 16), index.crc);
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_crc32_check_value);
@@ -177,5 +184,6 @@ int main() {
     RUN_TEST(test_rejects_zero_steps);
     RUN_TEST(test_encode_effect_plan_round_trips);
     RUN_TEST(test_encode_refuses_small_buffer);
+    RUN_TEST(test_index_keeps_the_file_crc);
     return UNITY_END();
 }

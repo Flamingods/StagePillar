@@ -7,8 +7,8 @@
 namespace {
 
 const uint32_t kReconnectMs = 2000;
-// If the socket stays down this long, look the server address up again.
-const uint32_t kReresolveMs = 30000;
+// If the socket stays down this long, reconnect to the (possibly re-resolved) server address.
+const uint32_t kRestartMs = 30000;
 
 WebSocketsClient ws;
 QueueHandle_t events;    // latest ShowEvent only (length 1, overwritten)
@@ -52,6 +52,9 @@ void start() {
     ws.begin(netServerIp().toString(), SERVER_PORT, "/api/buttons/ws");
     ws.onEvent(onEvent);
     ws.setReconnectInterval(kReconnectMs);
+    // Ping every 5 s; two missed pongs (3 s each) close the socket, so a crashed or rebooted
+    // Pi is noticed instead of leaving the last game drawn forever.
+    ws.enableHeartbeat(5000, 3000, 2);
     begun = true;
     downSinceMs = millis();
 }
@@ -61,11 +64,18 @@ void linkTask(void*) {
         if (netConnected()) {
             if (!begun) start();
             ws.loop();
-            if (!connected && millis() - downSinceMs > kReresolveMs) {
+            // Reconnect with whatever address the sender/poll currently use. The shared
+            // address cache is not cleared here, so presses never pay for a lookup.
+            if (!connected && millis() - downSinceMs > kRestartMs) {
                 ws.disconnect();
-                netForgetServerIp();
                 start();
             }
+        } else if (begun) {
+            // WiFi is gone: the socket is dead even if the library has not noticed yet.
+            ws.disconnect();
+            begun = false;
+            if (connected) Serial.println("Show: socket dropped (WiFi down)");
+            connected = false;
         }
         vTaskDelay(pdMS_TO_TICKS(5));
     }
