@@ -5,7 +5,8 @@
 
 // One plan per show state or gesture, as in the StageController pillar LED contract.
 // Preview is the editor's draft, played on request and never stored as a slot.
-enum class Slot : uint8_t { None, Idle, Start, Claps, Special, Skip, Stop, Preview };
+// Program is the library program the Pi commanded; it replaces the idle/play base.
+enum class Slot : uint8_t { None, Idle, Start, Claps, Special, Skip, Stop, Preview, Program };
 
 constexpr uint8_t kStoredSlots = 6;  // Idle .. Stop
 extern const Slot kSlots[kStoredSlots];
@@ -32,6 +33,12 @@ public:
     void setShowRunning(bool running, uint32_t nowMs);
     void playPreview(Plan plan, uint32_t nowMs);
     void endPreview(uint32_t nowMs);
+    bool previewActive() const { return active_ == Slot::Preview; }
+    // A commanded program becomes the base layer until cleared or, if it does not loop,
+    // until it finishes (reported once by takeProgramFinished).
+    void setProgram(Plan plan, uint32_t nowMs);
+    void clearProgram(uint32_t nowMs);
+    bool takeProgramFinished();
     // Plans changed on disk: restart the base loop from its new plan. A one-shot ends,
     // since its file may have been replaced under it.
     void reload(uint32_t nowMs);
@@ -39,12 +46,15 @@ public:
 
 private:
     void play(Slot slot, uint32_t nowMs);
-    Slot base() const { return running_ ? Slot::Start : Slot::Idle; }
+    Slot base() const { return programActive_ ? Slot::Program : running_ ? Slot::Start : Slot::Idle; }
 
     Lookup lookup_;
     bool running_ = false;
     Slot active_ = Slot::Idle;
     uint32_t activeStartMs_ = 0;
     Plan preview_{nullptr, nullptr};
+    Plan program_{nullptr, nullptr};
+    bool programActive_ = false;
+    bool programFinished_ = false;
     SequenceRenderer renderer_;
 };

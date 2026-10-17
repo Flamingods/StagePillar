@@ -245,6 +245,76 @@ void test_looping_preview_stops_itself_after_60s() {
     TEST_ASSERT_TRUE(showing(Slot::Idle, 61000, 61000));
 }
 
+// A program: solid green, 400 ms, loop flag as given.
+static uint8_t programBuf[64];
+static MemorySource* programSrc;
+static PlanIndex programIndex;
+static Plan programPlan(bool loop) {
+    const EffectStep steps[] = {{EffectId::Solid, 400, 255, Direction::Up, 16, {{0, 200, 0}}}};
+    uint32_t len = encodeEffectPlan(5, loop, steps, 1, programBuf, sizeof(programBuf));
+    delete programSrc;
+    programSrc = new MemorySource(programBuf, len);
+    planIndex(*programSrc, programIndex);
+    return Plan{programSrc, &programIndex};
+}
+
+void test_program_replaces_the_base_layer() {
+    PillarPlayer p;
+    Plan prog = programPlan(true);
+    p.setProgram(prog, 1000);
+    p.render(1100, frame, N);
+    TEST_ASSERT_TRUE(showingPlan(prog, 1000, 1100));
+    p.setShowRunning(true, 2000);  // a song starting does not replace the program
+    p.render(2100, frame, N);
+    TEST_ASSERT_TRUE(showingPlan(prog, 1000, 2100));
+}
+
+void test_gesture_during_program_returns_to_the_program() {
+    PillarPlayer p;
+    Plan prog = programPlan(true);
+    p.setProgram(prog, 0);
+    p.trigger(Slot::Skip, 1000);
+    p.render(1200, frame, N);
+    TEST_ASSERT_TRUE(showing(Slot::Skip, 1000, 1200));
+    p.render(1500, frame, N);  // skip lasts 500 ms
+    TEST_ASSERT_TRUE(showingPlan(prog, 1500, 1500));
+}
+
+void test_one_shot_program_ends_and_reports_it() {
+    PillarPlayer p;
+    p.setProgram(programPlan(false), 1000);
+    p.render(1200, frame, N);
+    TEST_ASSERT_FALSE(p.takeProgramFinished());
+    p.render(1400, frame, N);  // 400 ms program over
+    TEST_ASSERT_TRUE(showing(Slot::Idle, 1400, 1400));
+    TEST_ASSERT_TRUE(p.takeProgramFinished());
+    TEST_ASSERT_FALSE(p.takeProgramFinished());
+}
+
+void test_clear_program_returns_to_normal() {
+    PillarPlayer p;
+    p.setShowRunning(true, 0);
+    p.setProgram(programPlan(true), 1000);
+    p.clearProgram(2000);
+    p.render(2100, frame, N);
+    TEST_ASSERT_TRUE(showing(Slot::Start, 2000, 2100));
+}
+
+void test_preview_wins_over_program_and_returns_to_it() {
+    PillarPlayer p;
+    Plan prog = programPlan(true);
+    p.setProgram(prog, 0);
+    Plan preview = previewPlan(false);
+    p.playPreview(preview, 1000);
+    p.render(1100, frame, N);
+    TEST_ASSERT_TRUE(p.previewActive());
+    TEST_ASSERT_TRUE(showingPlan(preview, 1000, 1100));
+    prog = programPlan(true);  // previewPlan rebuilt its buffer; rebuild the program plan too
+    p.render(1300, frame, N);
+    TEST_ASSERT_FALSE(p.previewActive());
+    TEST_ASSERT_TRUE(showingPlan(prog, 1300, 1300));
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_slot_for_each_gesture);
@@ -265,5 +335,10 @@ int main() {
     RUN_TEST(test_reload_restarts_the_base_loop_with_its_new_plan);
     RUN_TEST(test_reload_ends_a_one_shot_whose_file_changed);
     RUN_TEST(test_looping_preview_stops_itself_after_60s);
+    RUN_TEST(test_program_replaces_the_base_layer);
+    RUN_TEST(test_gesture_during_program_returns_to_the_program);
+    RUN_TEST(test_one_shot_program_ends_and_reports_it);
+    RUN_TEST(test_clear_program_returns_to_normal);
+    RUN_TEST(test_preview_wins_over_program_and_returns_to_it);
     return UNITY_END();
 }

@@ -81,11 +81,12 @@ static const uint32_t kPreviewMaxMs = 60000;
 void PillarPlayer::play(Slot slot, uint32_t nowMs) {
     active_ = slot;
     activeStartMs_ = nowMs;
-    renderer_.start(slot == Slot::Preview ? preview_ : lookup_(slot), nowMs, nowMs);
+    Plan plan = slot == Slot::Preview ? preview_ : slot == Slot::Program ? program_ : lookup_(slot);
+    renderer_.start(plan, nowMs, nowMs);
 }
 
 void PillarPlayer::trigger(Slot slot, uint32_t nowMs) {
-    if (slot == Slot::None || slot == Slot::Preview) return;
+    if (slot == Slot::None || slot == Slot::Preview || slot == Slot::Program) return;
     if (slot == Slot::Start) running_ = true;
     if (slot == Slot::Stop) running_ = false;
     play(slot, nowMs);
@@ -96,8 +97,9 @@ void PillarPlayer::setShowRunning(bool running, uint32_t nowMs) {
     running_ = running;
     if (active_ == Slot::Preview) return;  // the preview keeps playing; base applies after it
     if (running) {
-        // A gesture in progress finishes first and then falls back to the play loop.
-        if (active_ == Slot::Idle) play(Slot::Start, nowMs);
+        // A gesture in progress finishes first and then falls back to the play loop;
+        // a program stays the base.
+        if (active_ == Slot::Idle) play(base(), nowMs);
     } else if (active_ != Slot::Stop) {
         play(Slot::Stop, nowMs);
     }
@@ -106,6 +108,25 @@ void PillarPlayer::setShowRunning(bool running, uint32_t nowMs) {
 void PillarPlayer::playPreview(Plan plan, uint32_t nowMs) {
     preview_ = plan;
     play(Slot::Preview, nowMs);
+}
+
+void PillarPlayer::setProgram(Plan plan, uint32_t nowMs) {
+    program_ = plan;
+    programActive_ = true;
+    programFinished_ = false;
+    if (active_ != Slot::Preview) play(Slot::Program, nowMs);
+}
+
+void PillarPlayer::clearProgram(uint32_t nowMs) {
+    if (!programActive_) return;
+    programActive_ = false;
+    if (active_ == Slot::Program) play(base(), nowMs);
+}
+
+bool PillarPlayer::takeProgramFinished() {
+    bool finished = programFinished_;
+    programFinished_ = false;
+    return finished;
 }
 
 void PillarPlayer::endPreview(uint32_t nowMs) {
@@ -119,6 +140,10 @@ void PillarPlayer::reload(uint32_t nowMs) {
 void PillarPlayer::render(uint32_t nowMs, Rgb* frame, uint16_t count) {
     if (active_ == Slot::Preview && nowMs - activeStartMs_ >= kPreviewMaxMs) play(base(), nowMs);
     if (renderer_.render(nowMs, frame, count)) return;
+    if (active_ == Slot::Program) {  // a one-shot program finished
+        programActive_ = false;
+        programFinished_ = true;
+    }
     play(base(), nowMs);
     renderer_.render(nowMs, frame, count);
 }
