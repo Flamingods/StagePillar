@@ -147,6 +147,41 @@ void test_works_across_millis_rollover() {
     assertOnly(s, Gesture::Double);
 }
 
+void test_reports_real_tap_count_and_first_press_time() {
+    Sim s;
+    s.hold(false, 10);            // first press edge at t=10
+    for (int i = 0; i < 3; i++) s.tap();
+    s.hold(false, 1000);
+    assertOnly(s, Gesture::Triple);
+    TEST_ASSERT_EQUAL_UINT8(3, s.detector.lastTaps());
+    TEST_ASSERT_EQUAL_UINT32(10, s.detector.lastFirstPressMs());
+}
+
+void test_many_reports_its_real_count() {
+    Sim s;
+    s.taps(7);
+    assertOnly(s, Gesture::Many);
+    TEST_ASSERT_EQUAL_UINT8(7, s.detector.lastTaps());
+}
+
+void test_tap_count_is_capped_at_20() {
+    Sim s;
+    s.taps(25);
+    assertOnly(s, Gesture::Many);
+    TEST_ASSERT_EQUAL_UINT8(20, s.detector.lastTaps());
+}
+
+void test_long_press_reports_one_tap_at_its_press_edge() {
+    Sim s;
+    s.hold(false, 10);
+    s.tap();                      // discarded by the long press
+    uint32_t edge = s.t;
+    s.hold(true, 2000);
+    assertOnly(s, Gesture::Long);
+    TEST_ASSERT_EQUAL_UINT8(1, s.detector.lastTaps());
+    TEST_ASSERT_EQUAL_UINT32(edge, s.detector.lastFirstPressMs());
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_one_tap_is_single);
@@ -166,5 +201,9 @@ int main() {
     RUN_TEST(test_held_forever_emits_one_long);
     RUN_TEST(test_tap_after_long_press_is_single);
     RUN_TEST(test_works_across_millis_rollover);
+    RUN_TEST(test_reports_real_tap_count_and_first_press_time);
+    RUN_TEST(test_many_reports_its_real_count);
+    RUN_TEST(test_tap_count_is_capped_at_20);
+    RUN_TEST(test_long_press_reports_one_tap_at_its_press_edge);
     return UNITY_END();
 }

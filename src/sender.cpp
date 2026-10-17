@@ -13,12 +13,14 @@
 struct QueuedGesture {
     Gesture gesture;
     uint32_t queuedAtMs;
+    uint8_t taps;
+    uint32_t firstPressMs;
 };
 
 static QueueHandle_t queue;
 
-static void send(Gesture gesture) {
-    const char* action = actionFor(gesture);
+static void send(const QueuedGesture& item) {
+    const char* action = actionFor(item.gesture);
     if (!action) return;
     if (otaActive()) {
         Serial.printf("Drop %s: OTA in progress\n", action);
@@ -31,9 +33,7 @@ static void send(Gesture gesture) {
         return;
     }
 
-    char path[64];
-    pressPath(path, sizeof(path), action, PILLAR_ID);
-    String url = "http://" + netServerIp().toString() + ":" + String(SERVER_PORT) + path;
+    String url = "http://" + netServerIp().toString() + ":" + String(SERVER_PORT) + "/api/buttons/press";
     HTTPClient http;
     http.setConnectTimeout(HTTP_TIMEOUT_MS);
     http.setTimeout(HTTP_TIMEOUT_MS);
@@ -41,7 +41,11 @@ static void send(Gesture gesture) {
     uint32_t start = millis();
     int code = -1;
     if (http.begin(url)) {
-        code = http.POST("");
+        // Measured just before sending so it includes the gap wait and queue time.
+        char body[128];
+        pressBody(body, sizeof(body), action, PILLAR_SIDE, item.taps, millis() - item.firstPressMs);
+        http.addHeader("Content-Type", "application/json");
+        code = http.POST(body);
         http.end();
     }
     Serial.printf("POST %s -> %d (%lu ms)\n", action, code, (unsigned long)(millis() - start));
@@ -71,7 +75,7 @@ static void senderTask(void*) {
             Serial.printf("Drop %s: waited too long in queue\n", actionFor(item.gesture));
             continue;
         }
-        send(item.gesture);
+        send(item);
     }
 }
 
@@ -80,7 +84,7 @@ void senderBegin() {
     xTaskCreate(senderTask, "sender", 8192, nullptr, 1, nullptr);
 }
 
-bool senderEnqueue(Gesture gesture) {
-    QueuedGesture item{gesture, millis()};
+bool senderEnqueue(Gesture gesture, uint8_t taps, uint32_t firstPressMs) {
+    QueuedGesture item{gesture, millis(), taps, firstPressMs};
     return xQueueSend(queue, &item, 0) == pdTRUE;
 }

@@ -20,6 +20,11 @@ public:
     // Returns the gesture on the call where it completes, else Gesture::None.
     Gesture update(bool pressed, uint32_t nowMs);
 
+    // For the gesture update() just returned: its real tap count (1 for a long press,
+    // capped at 20) and the time of its first press edge.
+    uint8_t lastTaps() const { return lastTaps_; }
+    uint32_t lastFirstPressMs() const { return lastFirstPressMs_; }
+
 private:
     GestureTiming timing_;
     bool raw_ = false;          // last sampled level
@@ -28,4 +33,7 @@ private:
     uint32_t stableSince_ = 0;  // edge time of the last debounced change
     uint8_t count_ = 0;         // presses in the current gesture
     bool longFired_ = false;    // Long already emitted for the current hold
+    uint32_t firstPressMs_ = 0; // press edge of the current gesture's first tap
+    uint8_t lastTaps_ = 0;
+    uint32_t lastFirstPressMs_ = 0;
 };

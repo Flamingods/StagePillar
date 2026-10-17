@@ -17,7 +17,7 @@ static bool pollState() {
     if (!netConnected()) return false;
     IPAddress server = netServerIp();
     char path[96];
-    if (!pollPath(path, sizeof(path), PILLAR_ID, planStoreVersion())) return false;
+    if (!pollPath(path, sizeof(path), PILLAR_SIDE, planStoreVersion())) return false;
     String url = "http://" + server.toString() + ":" + String(SERVER_PORT) + path;
     HTTPClient http;
     http.setConnectTimeout(HTTP_TIMEOUT_MS);
