@@ -2,6 +2,7 @@
 #include <string.h>
 #include <unity.h>
 #include "pole_render.h"
+#include "show_gate.h"
 
 static const uint16_t N = 100;
 static Rgb frame[N];
@@ -148,6 +149,27 @@ void test_palette_from_server_json() {
     TEST_ASSERT_FALSE(parsePalette("nope", p));
 }
 
+void test_live_server_palette_parses() {
+    // Captured from the Pi's GET /api/show/palette (2026-10-17); version is above 2^31.
+    const char* json =
+        "{\"version\":3788725316,\"colors\":{\"pink\":{\"ramp\":[[196,0,122],[255,20,147],[255,106,193]],"
+        "\"gain\":1.0,\"drift_ms\":2000},\"lime\":{\"ramp\":[[70,190,0],[125,255,0],[205,255,130]],\"gain\":1.0,"
+        "\"drift_ms\":2800},\"blue\":{\"ramp\":[[12,50,215],[20,80,255],[96,150,255]],\"gain\":1.0,\"drift_ms\":2800},"
+        "\"white\":{\"ramp\":[[190,190,205],[255,255,255],[255,255,255]],\"gain\":1.0,\"drift_ms\":2800}}}";
+    Palette p;
+    TEST_ASSERT_TRUE(parsePalette(json, p));
+    TEST_ASSERT_EQUAL_UINT32(3788725316u, p.version);
+    TEST_ASSERT_EQUAL_UINT8(4, p.count);
+    TEST_ASSERT_EQUAL_UINT32(2000, paletteFind(p, "pink")->driftMs);
+    TEST_ASSERT_EQUAL_UINT8(205, paletteFind(p, "white")->ramp[0].b);
+}
+
+void test_large_palette_version_in_state_reply() {
+    uint32_t v = 0;
+    TEST_ASSERT_TRUE(parseUintField("{\"show_palette_version\":3788725316}", "show_palette_version", v));
+    TEST_ASSERT_EQUAL_UINT32(3788725316u, v);
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_solid_fills_from_the_bottom);
@@ -161,5 +183,7 @@ int main() {
     RUN_TEST(test_gain_scales_and_caps_at_255);
     RUN_TEST(test_unknown_colour_draws_white);
     RUN_TEST(test_palette_from_server_json);
+    RUN_TEST(test_live_server_palette_parses);
+    RUN_TEST(test_large_palette_version_in_state_reply);
     return UNITY_END();
 }
