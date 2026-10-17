@@ -60,6 +60,32 @@ the ESP side only.
   (`lib/pillar/show_latch.h`), so a stale poll cannot replay the stop fade.
 - The poll reports `?client=pillar&running_version=<n>` so the server can show pillar status.
 
+## Two pillars (added 2026-10-17)
+
+Two pillars with identical hardware and behaviour: same LED plans, same gestures,
+same show-state rules, same preview. The ID only tells them apart for status, logs
+and OTA. A later "dual games mode" will need a separate input mode; it is out of scope here.
+
+- `PILLAR_ID` (1 or 2) is a build flag set per PlatformIO environment. Each environment
+  also sets the matching OTA target, so a build for one pillar cannot be flashed to the
+  other by accident:
+  - `pillar1` / `pillar1-ota` → `stage-pillar-1.local`
+  - `pillar2` / `pillar2-ota` → `stage-pillar-2.local`
+  The old `esp32dev` / `esp32dev-ota` environments are removed. A build without
+  `PILLAR_ID` fails with a clear error.
+- The hostname (WiFi, mDNS, OTA) is `stage-pillar-<id>`. The existing board
+  (192.168.0.101) becomes pillar 1; its first OTA upload goes to the old `stage-pillar`
+  name.
+- Every request carries the ID as a query parameter:
+  - poll: `GET /api/player/state?client=pillar&pillar_id=<id>&running_version=<n>`
+  - press: `POST /api/buttons/press/<action>?pillar_id=<id>`
+  The current server ignores unknown query parameters, so the firmware can ship
+  before the server change. StageController tracks status per pillar (contract change,
+  agreed with that side).
+- Plans and previews stay shared: one set of slot files and one preview for both pillars.
+- Tests: native tests for the URL builders (poll and press carry `pillar_id`); on
+  hardware, pillar 1 answers as `stage-pillar-1.local` and the server lists it as pillar 1.
+
 ## Hardware
 
 - Button on **GPIO 12**, `INPUT_PULLUP`. Pressed = HIGH (matches the existing board wiring).
