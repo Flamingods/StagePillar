@@ -114,8 +114,9 @@ which program to play. The gesture slots stay as the fallback behaviour.
 - An active program replaces the base layer (idle, or the play loop while the show runs).
 - Gestures still play their one-shot slot, then return to the program.
 - A non-looping program that finishes, or a release, ends the program and the pillar
-  goes back to normal behaviour. So does losing the Pi: no successful poll for 10 s
-  releases the program locally.
+  goes back to normal behaviour. Losing the Pi (no successful poll for 10 s)
+  only pauses the program: the pillar shows normal behaviour, keeps the command, and
+  resumes the program when polls succeed again (unless a newer command released it).
 - The ESP always keeps the latest command (seq, program), even when it does not have
   that program yet (a program saved and commanded at once can arrive before the library
   sync). An unknown id means "normal behaviour for now": after every library sync the
