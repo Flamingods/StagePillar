@@ -30,7 +30,7 @@ static portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
 static bool failPending = false;
 
 void pillarLedsBegin() {
-    FastLED.addLeds<WS2812B, PILLAR_LED_PIN, GRB>(leds, kLeds);
+    FastLED.addLeds<WS2812B, PILLAR_LED_PIN, BRG>(leds, kLeds);
     FastLED.setBrightness(PILLAR_BRIGHTNESS);
     FastLED.clear(true);
     player.reload(millis());  // plans were loaded from flash after the player was built
