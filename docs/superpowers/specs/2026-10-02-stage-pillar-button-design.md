@@ -86,6 +86,38 @@ and OTA. A later "dual games mode" will need a separate input mode; it is out of
 - Tests: native tests for the URL builders (poll and press carry `pillar_id`); on
   hardware, pillar 1 answers as `stage-pillar-1.local` and the server lists it as pillar 1.
 
+## Programs commanded by the Pi (added 2026-10-17)
+
+A library of pre-built LED programs lives on StageController; the Pi tells each pillar
+which program to play. The gesture slots stay as the fallback behaviour.
+
+**Library**
+- Programs are PLP1 files (same format as slots: effects, frames, transitions, loop flag),
+  identified by a number 1..255. Both pillars download the whole library ahead of time.
+- The state reply carries `pillar_programs_version`. When it changes, the ESP fetches
+  `GET /api/pillar/programs/index` (`{"version":N,"ids":[1,4,7]}`) and then each
+  `GET /api/pillar/programs/<id>.bin` into staging, and `loop()` swaps the round in, as
+  for slots (a version mismatch mid-round retries; an unplayable program is skipped).
+- Limits, enforced by the server: at most 24 programs and 1 MB total.
+
+**Commands (per pillar)**
+- A command is `{seq, program}`; `program` 0 means release. `seq` is a server counter
+  that never decreases (persisted); the ESP applies a command only if `seq` is greater
+  than the last applied one.
+- Fast path: UDP to the pillar's port 4210, sent to the address of its last poll. Packet,
+  12 bytes, little-endian: `"PLC1"` | `seq` u32 | `program` u16 | reserved u16.
+- Backup: the state reply for `pillar_id=N` carries that pillar's current command as
+  `pillar_command: {"seq":S,"program":P}`, so a lost UDP packet is corrected within ~1 s.
+  After an ESP reboot (last seq 0) this restores the active program.
+
+**Playback**
+- An active program replaces the base layer (idle, or the play loop while the show runs).
+- Gestures still play their one-shot slot, then return to the program.
+- A non-looping program that finishes, a release, or an unknown program id ends the
+  program and the pillar goes back to normal behaviour. So does losing the Pi: no
+  successful poll for 10 s releases the program locally.
+- Preview ("Play on pillar") is unchanged and still interrupts everything.
+
 ## Hardware
 
 - Button on **GPIO 12**, `INPUT_PULLUP`. Pressed = HIGH (matches the existing board wiring).
