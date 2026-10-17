@@ -46,16 +46,33 @@ A gesture plays its slot once, then returns to the play loop while the show runs
 When the show ends (stop pressed or the song ends) the stop fade plays, then idle. Two quick red
 flashes mean the press did not reach the server. The strip is dark during OTA.
 
+## Show (StageController)
+
+The pillars are the two sides of the stage, **L** and **R** (seen from the entrance). Every
+gesture is sent to `POST /api/buttons/press` with its side, real tap count and
+`first_press_ago_ms`; StageController's show director decides what it does (games, launches,
+claps, ...). The pillar keeps a WebSocket to `/api/buttons/ws` and draws the show's pole for
+its side (fill, glow, pulse, blink, drain, drifting palette colours, like Tom's emulator). The
+Pi can also command a program from its library per side. What is drawn, top wins:
+
+1. "Play on pillar" preview
+2. the show's pole, during a game (show state not `idle`)
+3. a gesture's one-shot slot
+4. the commanded program
+5. the slot base: idle rainbow, or the play comet while a song is loaded
+
+Without the Pi the pillar keeps working on its own slots. Contracts:
+`StageController/docs/show-events-contract.md` and `StageController/docs/pillar-led-contract.md`.
+
 ## Setup
 
-There are two identical pillars. Each build is for one of them: the environment sets
-`PILLAR_ID` and the matching OTA hostname (`stage-pillar-1.local` / `stage-pillar-2.local`).
-Requests to the server carry `pillar_id` so it can show each pillar's status.
+Each build is for one side: the environment sets the side and the matching OTA hostname
+(`stage-pillar-l.local` / `stage-pillar-r.local`).
 
 ```bash
 cp include/secrets.example.h include/secrets.h        # then edit
 pio test -e native                                     # unit tests on the host
-pio run -e pillar2 -t upload                           # first flash of a board over USB
-ESP_OTA_PASSWORD=... pio run -e pillar1-ota -t upload  # OTA to stage-pillar-1.local
-ESP_OTA_PASSWORD=... pio run -e pillar2-ota -t upload  # OTA to stage-pillar-2.local
+pio run -e pillarL -t upload                           # first flash of a board over USB
+ESP_OTA_PASSWORD=... pio run -e pillarR-ota -t upload  # OTA to stage-pillar-r.local
+ESP_OTA_PASSWORD=... pio run -e pillarL-ota -t upload  # OTA to stage-pillar-l.local
 ```

@@ -7,6 +7,7 @@
 #include "pillar_leds.h"
 #include "plan_store.h"
 #include "sender.h"
+#include "show_link.h"
 #include "show_state.h"
 #include "status_led.h"
 
@@ -21,6 +22,7 @@ void setup() {
     pillarLedsBegin();
     netBegin();
     senderBegin();
+    showLinkBegin();
     showStateBegin();
 }
 

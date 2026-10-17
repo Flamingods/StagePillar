@@ -1,8 +1,12 @@
 #include "pillar_leds.h"
 #include <FastLED.h>
 #include "config.h"
+#include "pillar_mixer.h"
 #include "pillar_player.h"
 #include "plan_store.h"
+#include "program_control.h"
+#include "show_link.h"
+#include "show_state.h"
 
 static const uint16_t kLeds = 100;
 static const uint32_t kFrameMs = 20;
@@ -14,6 +18,9 @@ static uint32_t lastFrameMs = 0;
 
 // Touched only from loop().
 static PillarPlayer player(planStoreLookup);
+static PillarMixer mixer(player);
+static ProgramControl programControl;
+static uint16_t programShown = 0;  // library id handed to the player, 0 = none
 static bool failActive = false;
 static uint32_t failStartMs = 0;
 
@@ -61,8 +68,37 @@ void pillarLedsUpdate(uint32_t nowMs, bool otaActive, bool showRunning) {
     if (planStoreTakePreview(preview)) player.playPreview(preview, nowMs);
     if (planStoreTakePreviewEnd()) player.endPreview(nowMs);
 
+    // Live show from the WebSocket.
+    ShowEvent event;
+    if (showLinkTakeEvent(event)) mixer.setShowEvent(event, nowMs);
+    mixer.setShowConnected(showLinkConnected());
+    Palette palette;
+    if (planStoreTakePalette(palette)) mixer.setPalette(palette);
+
+    // Commanded program: the latest command, resolved against the stored library.
+    bool libraryChanged = planStoreApplyPrograms();
+    PillarCommand command;
+    while (showLinkTakeCommand(command)) programControl.offer(command);
+    uint32_t pollAtMs;
+    if (showLastPollOk(pollAtMs)) programControl.pollOk(pollAtMs);
+    uint16_t wanted = programControl.wanted(nowMs);
+    if (wanted != programShown || (libraryChanged && wanted != 0)) {
+        Plan program;
+        if (wanted != 0 && planStoreProgram(wanted, program)) {
+            player.setProgram(program, nowMs);
+            programShown = wanted;
+        } else {
+            player.clearProgram(nowMs);  // released, paused, or not in the library yet
+            programShown = 0;
+        }
+    }
+
     player.setShowRunning(showRunning, nowMs);
-    player.render(nowMs, frame, kLeds);
+    mixer.render(nowMs, frame, kLeds);
+    if (player.takeProgramFinished()) {
+        programControl.finished();
+        programShown = 0;
+    }
     for (uint16_t i = 0; i < kLeds; i++) out[i] = frame[i];
     if (failActive && !overlayFail(nowMs - failStartMs, out, kLeds)) failActive = false;
 

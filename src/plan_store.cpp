@@ -4,6 +4,7 @@
 #include <string.h>
 #include "config.h"
 #include "net.h"
+#include "program_control.h"
 
 namespace {
 
@@ -33,6 +34,9 @@ const char* kStaging = "/plans/new";
 const char* kVersionFile = "/plans/version";
 const char* kPreviewStaging = "/preview.new";
 const char* kPreviewFile = "/preview.bin";
+const char* kProgramsDir = "/programs";
+const char* kProgramsStaging = "/programs/new";
+const char* kProgramsVersionFile = "/programs/version";
 const uint32_t kRetryMinMs = 5000;
 const uint32_t kRetryMaxMs = 300000;
 
@@ -51,6 +55,20 @@ PlanIndex stagedIndexes[kStoredSlots];
 bool stagedValid[kStoredSlots];
 PlanIndex stagedPreviewIndex;
 
+// Program library: loop() owns the active set; the download task fills the staged set
+// while stagedProgramsVersion is 0.
+struct ProgramEntry {
+    uint8_t id;
+    FileSource source;
+    PlanIndex index;
+};
+ProgramEntry programs[kMaxPrograms];
+uint8_t programCount = 0;
+uint8_t stagedIds[kMaxPrograms];
+PlanIndex stagedProgramIndexes[kMaxPrograms];
+uint8_t stagedProgramCount = 0;
+Palette stagedPalette;
+
 // Hand-over flags between the tasks.
 volatile uint32_t activeVersion = 0;
 volatile uint32_t stagedVersion = 0;    // non-zero: a complete round waits in kStaging
@@ -58,12 +76,22 @@ volatile uint32_t stagedPreviewId = 0;  // non-zero: a preview waits in kPreview
 volatile bool previewEnded = false;
 volatile uint32_t targetVersion = 0;
 volatile uint32_t targetPreviewId = 0;
+volatile uint32_t activeProgramsVersion = 0;
+volatile uint32_t stagedProgramsVersion = 0;  // non-zero: a complete library round waits
+volatile uint32_t targetProgramsVersion = 0;
+volatile uint32_t activePaletteVersion = 0;
+volatile bool paletteStaged = false;
+volatile uint32_t targetPaletteVersion = 0;
 
 // Download task only.
 uint32_t lastPreviewId = 0;
 uint32_t failedVersion = 0;
 uint32_t failedAtMs = 0;
 uint32_t retryMs = kRetryMinMs;
+uint32_t programsFailedVersion = 0;
+uint32_t programsFailedAtMs = 0;
+uint32_t programsRetryMs = kRetryMinMs;
+uint32_t paletteFailedAtMs = 0;
 
 String slotPath(const char* dir, Slot slot) { return String(dir) + "/" + slotName(slot) + ".bin"; }
 
@@ -74,8 +102,8 @@ int slotIndex(Slot slot) {
     return -1;
 }
 
-uint32_t readVersionFile() {
-    File f = LittleFS.open(kVersionFile, "r");
+uint32_t readVersionFile(const char* path = kVersionFile) {
+    File f = LittleFS.open(path, "r");
     if (!f) return 0;
     uint32_t v = f.readString().toInt();
     f.close();
@@ -121,6 +149,18 @@ bool indexFile(const char* path, PlanIndex& out) {
     return planIndex(src, out);
 }
 
+void clearDir(const char* path) {
+    File dir = LittleFS.open(path);
+    if (!dir) return;
+    for (File f = dir.openNextFile(); f; f = dir.openNextFile()) {
+        bool isDir = f.isDirectory();
+        String child = String(path) + "/" + f.name();
+        f.close();
+        if (!isDir) LittleFS.remove(child);
+    }
+    dir.close();
+}
+
 void clearStaging() {
     File dir = LittleFS.open(kStaging);
     if (!dir) return;
@@ -163,6 +203,80 @@ bool downloadRound(uint32_t version) {
     return true;
 }
 
+// GET into a String; false on any failure or a body over maxBytes.
+bool getText(const String& url, String& out, uint32_t maxBytes) {
+    HTTPClient http;
+    http.setConnectTimeout(HTTP_TIMEOUT_MS);
+    http.setTimeout(HTTP_TIMEOUT_MS);
+    if (!http.begin(url)) return false;
+    int code = http.GET();
+    bool ok = code == 200 && http.getSize() > 0 && uint32_t(http.getSize()) <= maxBytes;
+    if (ok) out = http.getString();
+    http.end();
+    if (!ok) Serial.printf("Plans: GET %s -> %d\n", url.c_str(), code);
+    return ok;
+}
+
+String programPath(const char* dir, uint8_t id) { return String(dir) + "/" + String(id) + ".bin"; }
+
+// Fetches the whole library for `version` into staging. A program the ESP cannot play is
+// left out; a version change or a failed download fails the round.
+bool downloadPrograms(uint32_t version) {
+    String text;
+    ProgramIndex idx;
+    if (!getText(apiBase() + "programs/index", text, 2048) || !parseProgramIndex(text.c_str(), idx)) return false;
+    if (idx.version != version) return false;
+    clearDir(kProgramsStaging);
+    stagedProgramCount = 0;
+    for (uint8_t i = 0; i < idx.count; i++) {
+        uint8_t id = idx.ids[i];
+        String path = programPath(kProgramsStaging, id);
+        if (download(apiBase() + "programs/" + String(id) + ".bin", path.c_str()) != 1) return false;
+        uint32_t fileVersion;
+        if (headerVersion(path.c_str(), fileVersion) && fileVersion != version) return false;
+        if (!indexFile(path.c_str(), stagedProgramIndexes[stagedProgramCount])) {
+            Serial.printf("Plans: program %u is not playable, skipped\n", id);
+            LittleFS.remove(path);
+            continue;
+        }
+        stagedIds[stagedProgramCount++] = id;
+    }
+    return true;
+}
+
+void syncPrograms() {
+    uint32_t version = targetProgramsVersion;
+    if (version == activeProgramsVersion || stagedProgramsVersion != 0) return;
+    if (version == programsFailedVersion && millis() - programsFailedAtMs < programsRetryMs) return;
+    Serial.printf("Plans: fetching program library %u\n", (unsigned)version);
+    if (downloadPrograms(version)) {
+        __sync_synchronize();  // staged library is complete before loop() can see the flag
+        stagedProgramsVersion = version;
+        programsFailedVersion = 0;
+        programsRetryMs = kRetryMinMs;
+    } else {
+        programsRetryMs = version == programsFailedVersion ? min(programsRetryMs * 2, kRetryMaxMs) : kRetryMinMs;
+        programsFailedVersion = version;
+        programsFailedAtMs = millis();
+    }
+}
+
+void syncPalette() {
+    uint32_t version = targetPaletteVersion;
+    if (version == 0 || version == activePaletteVersion || paletteStaged) return;
+    if (millis() - paletteFailedAtMs < kRetryMinMs) return;
+    String text;
+    Palette p;
+    if (getText("http://" + netServerIp().toString() + ":" + String(SERVER_PORT) + "/api/show/palette", text, 4096) &&
+        parsePalette(text.c_str(), p)) {
+        stagedPalette = p;
+        __sync_synchronize();
+        paletteStaged = true;
+    } else {
+        paletteFailedAtMs = millis();
+    }
+}
+
 void syncPreview() {
     uint32_t id = targetPreviewId;
     if (id == lastPreviewId || stagedPreviewId != 0) return;
@@ -202,7 +316,9 @@ void downloadTask(void*) {
     for (;;) {
         if (netConnected()) {
             syncPreview();
+            syncPalette();
             syncPlans();
+            syncPrograms();
         }
         vTaskDelay(pdMS_TO_TICKS(200));
     }
@@ -224,7 +340,28 @@ void planStoreBegin() {
         valid[i] = LittleFS.exists(path) && indexFile(path.c_str(), indexes[i]);
     }
     activeVersion = readVersionFile();
-    Serial.printf("Plans: version %u\n", (unsigned)activeVersion);
+    LittleFS.mkdir(kProgramsDir);
+    LittleFS.mkdir(kProgramsStaging);
+    File dir = LittleFS.open(kProgramsDir);
+    for (File f = dir.openNextFile(); f && programCount < kMaxPrograms; f = dir.openNextFile()) {
+        String name = f.name();
+        bool isDir = f.isDirectory();
+        f.close();
+        if (isDir || !name.endsWith(".bin")) continue;
+        int id = name.toInt();
+        if (id < 1 || id > 255) continue;
+        ProgramEntry& e = programs[programCount];
+        String path = programPath(kProgramsDir, uint8_t(id));
+        e.source.setPath(path);
+        if (indexFile(path.c_str(), e.index)) {
+            e.id = uint8_t(id);
+            programCount++;
+        }
+    }
+    dir.close();
+    activeProgramsVersion = readVersionFile(kProgramsVersionFile);
+    Serial.printf("Plans: version %u, programs %u (%u stored)\n", (unsigned)activeVersion,
+                  (unsigned)activeProgramsVersion, programCount);
     xTaskCreate(downloadTask, "plans", 8192, nullptr, 1, nullptr);
 }
 
@@ -270,12 +407,56 @@ bool planStoreTakePreviewEnd() {
     return true;
 }
 
+bool planStoreProgram(uint16_t id, Plan& out) {
+    for (uint8_t i = 0; i < programCount; i++) {
+        if (programs[i].id == id) {
+            out = Plan{&programs[i].source, &programs[i].index};
+            return true;
+        }
+    }
+    return false;
+}
+
+bool planStoreApplyPrograms() {
+    uint32_t version = stagedProgramsVersion;
+    if (version == 0) return false;
+    clearDir(kProgramsDir);  // files only; the staging folder stays
+    programCount = 0;
+    for (uint8_t i = 0; i < stagedProgramCount; i++) {
+        uint8_t id = stagedIds[i];
+        String active = programPath(kProgramsDir, id);
+        LittleFS.rename(programPath(kProgramsStaging, id), active);
+        ProgramEntry& e = programs[programCount++];
+        e.id = id;
+        e.source.setPath(active);
+        e.index = stagedProgramIndexes[i];
+    }
+    File f = LittleFS.open(kProgramsVersionFile, "w");
+    f.print(version);
+    f.close();
+    activeProgramsVersion = version;
+    stagedProgramsVersion = 0;
+    Serial.printf("Plans: program library %u (%u programs)\n", (unsigned)version, programCount);
+    return true;
+}
+
+bool planStoreTakePalette(Palette& out) {
+    if (!paletteStaged) return false;
+    out = stagedPalette;
+    activePaletteVersion = out.version;
+    paletteStaged = false;
+    return true;
+}
+
 uint32_t planStoreVersion() {
     return activeVersion;
 }
 
-void planStoreSetTarget(uint32_t version, uint32_t previewId) {
+void planStoreSetTarget(uint32_t plansVersion, uint32_t previewId, uint32_t programsVersion,
+                        uint32_t paletteVersion) {
+    targetPaletteVersion = paletteVersion;  // RAM only, works without the file system
     if (!mounted) return;
-    targetVersion = version;
+    targetVersion = plansVersion;
     targetPreviewId = previewId;
+    targetProgramsVersion = programsVersion;
 }
